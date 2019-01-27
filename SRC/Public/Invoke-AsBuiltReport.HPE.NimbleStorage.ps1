@@ -34,19 +34,19 @@ function Invoke-AsBuiltReport.HPE.NimbleStorage {
         Try {
             $ConnectedNimbleGroup = Connect-NSGroup -Group $NimbleGroup -Credential $Credential -IgnoreServerCertificate
         } Catch {
-            Write-Verbose "Unable to connect to the Pure Storage FlashArray $FlashArray"
+            Write-Verbose "Unable to connect to the Nimble Storage Group $NimbleGroup"
         }
     
         if ($ConnectedNimbleGroup) {
-            $script:Arrays = Get-NSArray
+            $script:Arrays = Get-NSArray | Sort-Object Name
 
             Foreach ($Array in $Arrays) {
-                $script:ArrayControllers = Get-NSController -array_id $Array.id
+                $script:ArrayControllers = Get-NSController -array_id $Array.id  | Sort-Object Name
                 $script:Volumes = Get-NSVolume
                 $Script:VolumeCollections = Get-NSVolumeCollection
                 $script:Users = Get-NSUser
                 $script:UserGroups = Get-NSUserGroup
-                $script:Disks = Get-NSDisk -array_id $Array.id
+                $script:Disks = Get-NSDisk -array_id $Array.id  | Sort-Object Type
 
                 Section -Style Heading1 $Array.name {
                     Section -Style Heading2 'System Summary' {
