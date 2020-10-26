@@ -18,9 +18,14 @@ function Invoke-AsBuiltReport.HPE.NimbleStorage {
     #region Script Parameters
     [CmdletBinding()]
     param (
+        [Parameter(Mandatory=$true)]
         [string[]] $Target,
+
+        [Parameter(Mandatory=$true)]
         [pscredential] $Credential,
-		$StylePath
+
+        [Parameter(Mandatory=$false)]
+        [string] $StylePath
     )
 
     # If custom style not set, use default style
@@ -28,93 +33,148 @@ function Invoke-AsBuiltReport.HPE.NimbleStorage {
         & "$PSScriptRoot\..\..\AsBuiltReport.HPE.NimbleStorage.Style.ps1"
     }
 
+    # Import Report Configuration
+    $Report = $ReportConfig.Report
+    $InfoLevel = $ReportConfig.InfoLevel
+    $Options = $ReportConfig.Options
+
     $Script:Array = $Null
     foreach ($NimbleGroup in $Target) {
         Try {
-            $ConnectedNimbleGroup = Connect-NSGroup -Group $NimbleGroup -Credential $Credential -IgnoreServerCertificate
+            # Setup the base URL to access the Nimble Group API
+            if ($Options.NimbleGroupPort) {
+                $NimbleBaseUrl = "https://" + $NimbleGroup + ":" + ($Options.NimbleGroupPort) + "/v1"
+            } else {
+                $NimbleBaseUrl = "https://" + $NimbleGroup + ":5392/v1"
+            }
+
+            # Use the provided credentials to get a token to be used in subsequent API calls to the Nimble Group
+            $HpeNimbleApiToken = Get-AbrHpeNimbleApiToken -BaseUrl $NimbleBaseUrl -username $Credential.Username -password $Credential.Password
+            
         } Catch {
-            Write-Verbose "Unable to connect to the Nimble Storage Group $NimbleGroup"
+            Write-Verbose "Unable to connect to the Nimble Storage Group API at $NimbleGroup"
         }
     
-        if ($ConnectedNimbleGroup) {
-            $script:Arrays = Get-NSArray | Sort-Object Name
+        if ($HpeNimbleApiToken) {
+            Write-Verbose "Connected to Nimble Storage Group API at $NimbleGroup"
 
-            Foreach ($Array in $Arrays) {
-                $script:ArrayControllers = Get-NSController -array_id $Array.id  | Sort-Object Name
-                $script:Volumes = Get-NSVolume
-                $Script:VolumeCollections = Get-NSVolumeCollection
-                $script:Users = Get-NSUser
-                $script:UserGroups = Get-NSUserGroup
-                $script:Disks = Get-NSDisk -array_id $Array.id  | Sort-Object Type
+            if ($NimbleArrays = Get-AbrHpeNimbleArray -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                Section -Style Heading2 'Array Summary' {
+                    $NimbleArrays
+                }
+            }
 
-                Section -Style Heading1 $Array.name {
-                    Section -Style Heading2 'System Summary' {
-                        Paragraph "The following section provides a summary of the array configuration for $($Array.name)."
-                        BlankLine
-                        $ArraySummary = [PSCustomObject] @{
-                            'Name' = $Array.name
-                            'Model' = $Array.model
-                            'Serial' = $Array.serial
-                            'ID' = $Array.id
-                            'Role' = $Array.Role
-                            'Pool Name' = $Array.pool_name
-                            'Pool ID' = $array.pool_id
-                            'Version' = $Array.version
-                            'All Flash' = $Array.all_flash
-                            #'Number of Volumes' = 
-                        }
-                        $ArraySummary | Table -Name 'Array Summary'
-                    }#End Section Heading2 'System Summary'
+            if ($NimbleVolumes = Get-AbrHpeNimbleVolume -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                Section -Style Heading2 'Volume Summary' {
+                    $NimbleVolumes
+                }
+            }
 
-                    Section -Style Heading2 'Storage Summary' {
-                        Paragraph "The following section provides a summary of the array storage for $($Array.name)."
-                        BlankLine
-                        $ArrayStorageSummary = [PSCustomObject] @{
-                            'Raw Capacity' = "$([math]::Round(($Array.raw_capacity_bytes) / 1TB, 2)) TB"
-                            'Usable Capacity' = "$([math]::Round(($Array.usable_capacity_bytes) / 1TB, 2)) TB"
-                            'Used' = "$([math]::Round(($Array.usage) / 1TB, 2)) TB"
-                            'Free' = "$([math]::Round(($Array.available_bytes) / 1TB, 2)) TB"
-                            'Volume Usage' = "$([math]::Round(($Array.vol_usage_bytes) / 1TB, 2)) TB"
-                            'Volume Compression' = $array.vol_compression
-                            "Volume Saved Space" = "$([math]::Round(($Array.vol_saved_bytes) / 1TB, 2)) TB"
-                            'Snapshot Usage' = "$([math]::Round(($Array.snap_usage_bytes) / 1TB, 2)) TB"
-                            'Snapshot Compression' = $array.snap_compression
-                            'Snapshot Saved Space' = "$([math]::Round(($Array.snap_saved_bytes) / 1TB, 2)) TB"
-                        }
-                        $ArrayStorageSummary | Table -Name 'Array Storage Summary'
-                    }#End Section Heading2 'Storage Summary'
+            Section -Style Heading2 'Hardware' {
+                if ($NimbleDisks = Get-AbrHpeNimbleDisk -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken -InfoLevel $InfoLevel.Disks) {
+                    Section -Style Heading3 'Disk Summary' {
+                        $NimbleDisks
+                    }   
+                }
 
-                    Section -Style Heading2 'Controller Summary' {
-                        Paragraph "The following section provides a summary of the controllers in $($Array.name)."
-                        BlankLine
-                        $ArrayControllerSummary = foreach ($ArrayController in $ArrayControllers) {
-                            [PSCustomObject] @{
-                                'Name' = $ArrayController.name
-                                'ID' = $ArrayController.id
-                                'Serial' = $ArrayController.serial
-                                'Support Address' = $ArrayController.support_address
-                                'State' = $ArrayController.state
-                            }
-                        }
-                        $ArrayControllerSummary | Table -Name 'Controller Summary'
-                    }#End Section Heading2 'Controller Summary'
+                if ($NimbleNics = Get-AbrHpeNimbleNic -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken -InfoLevel $InfoLevel.Nics) {
+                    Section -Style Heading3 'NIC Summary' {
+                        $NimbleNics
+                    }
+                }
+            }
 
-                    Section -Style Heading2 'Disk Summary' {
-                        Paragraph "The following section provides a summary of the disks in $($Array.name)."
-                        BlankLine
-                        $ArrayDiskSummary = foreach ($Disk in $disks) {
-                            [PSCustomObject] @{
-                                'Type' = $Disk.Type
-                                'Slot' = $Disk.slot
-                                'Serial' = $Disk.serial
-                                'Model' = $Disk.model
-                                'Size' = "$([math]::Round(($Disk.size) / 1GB, 0)) GB"
-                            }
-                        }
-                        $ArrayDiskSummary | Table -Name 'Disk Summary'
-                    }#End Section Heading2 'Disk Summary'
-                }#End Section Heading1 $Array.name
-            }#End Foreach ($Array in $Arrays)
+            Section -Style Heading2 'Security' {
+
+                if ($NimbleAD = Get-AbrHpeNimbleActiveDirectory -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'Active Directory Summary' {
+                        $NimbleAD
+                    }
+                }
+
+                if ($NimbleUserGroups = Get-AbrHpeNimbleUserGroup -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'User Group Summary' {
+                        $NimbleUserGroups
+                    }
+                }
+
+                if ($NimbleUsers = Get-AbrHpeNimbleUser -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'User Summary' {
+                        $NimbleUsers
+                    }
+                }
+            }      
+
+            Section -Style Heading2 'Data Access' {
+                if ($NimbleInitiatorGroups = Get-AbrHpeNimbleInitiatorGroup -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'Initiator Group Summary' {
+                        $NimbleInitiatorGroups
+                    }
+                }
+
+                #if ($NimbleChapAccounts = Get-AbrHpeNimbleChapAccount -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                #    Section -Style Heading3 'CHAP Summary' {
+                #        $NimbleChapAccounts
+                #    }
+                #}
+            }
+
+            Section -Style Heading2 'Alerts and Monitoring' {
+                if ($NimbleEmail = Get-AbrHpeNimbleEmail -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'Email Summary' {
+                        $NimbleEmail
+                    }
+                }
+
+                if ($NimbleSnmp = Get-AbrHpeNimbleSnmp -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'SNMP Summary' {
+                        $NimbleSnmp
+                    }
+                }
+
+                if ($NimbleSyslog = Get-AbrHpeNimbleSyslog -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'Syslog Summary' {
+                        $NimbleSyslog
+                    }
+                }
+
+            }
+
+            Section -Style Heading2 'Network Configuration' {
+
+                if ($NimbleSubnets = Get-AbrHpeNimbleSubnets -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'Subnets' {
+                        $NimbleSubnets
+                    }
+                }
+
+                if ($NimbleInterfaces = Get-AbrHpeNimbleInterfaces -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'Interfaces' {
+                        $NimbleInterfaces
+                    }
+                }
+
+                if ($NimbleDiagnostics = Get-AbrHpeNimbleDiagnostics -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'Diagnostics' {
+                        $NimbleDiagnostics
+                    }
+                }
+
+                if ($NimbleDns = Get-AbrHpeNimbleDns -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'DNS Summary' {
+                        $NimbleDns
+                    }
+                }
+            }
+
+            Section -Style Heading2 'Date and Timezone' {
+                if ($NimbleTime = Get-AbrHpeNimbleTime -BaseUri $NimbleBaseUrl -Token $HpeNimbleApiToken) {
+                    Section -Style Heading3 'Date and Timezone Summary' {
+                        $NimbleTime
+                    }
+                }
+            }
+
         }#End if ($ConnectedNimbleGroup)
     }#End Foreach ($NimbleGroup in $Target)
 }#End Function Invoke-AsBuiltReport.HPE.NimbleStorage
